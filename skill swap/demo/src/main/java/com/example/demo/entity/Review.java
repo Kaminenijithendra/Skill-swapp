@@ -30,7 +30,7 @@ public class Review {
 
     private Integer rating;
 
-    @Column(length = 1000)
+    @Column(name = "review_comment",length = 1000)
     private String comment;
 
     private LocalDateTime createdAt;

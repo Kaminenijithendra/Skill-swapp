@@ -1,8 +1,9 @@
 package com.example.demo.service;
 
-
 import com.example.demo.dto.*;
+import com.example.demo.entity.PendingUser;
 import com.example.demo.entity.User;
+import com.example.demo.repository.PendingUserRepository;
 import com.example.demo.repository.UserRepository;
 import com.example.demo.security.JwtService;
 import lombok.RequiredArgsConstructor;
@@ -19,10 +20,12 @@ import java.time.LocalDateTime;
 public class AuthService {
 
     private final UserRepository userRepository;
+    private final PendingUserRepository pendingUserRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
     private final OtpUtil otpUtil;
+    private final EmailService emailService;
 
     @Value("${app.otp.expiry-minutes}")
     private long otpExpiryMinutes;
@@ -32,51 +35,63 @@ public class AuthService {
             throw new RuntimeException("Email already registered");
         }
 
+        if (pendingUserRepository.existsByEmail(request.getEmail())) {
+            throw new RuntimeException("OTP already sent to this email. Please verify first.");
+        }
+
         String otp = otpUtil.generateOtp();
 
-        User user = User.builder()
+        PendingUser pendingUser = PendingUser.builder()
                 .fullName(request.getFullName())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .phone(request.getPhone())
-                .bio("")
-                .location("")
-                .role("ROLE_USER")
-                .verified(false)
                 .otp(otp)
                 .otpExpiry(LocalDateTime.now().plusMinutes(otpExpiryMinutes))
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        userRepository.save(user);
+        pendingUserRepository.save(pendingUser);
 
-        System.out.println("OTP for " + request.getEmail() + " : " + otp);
+        try {
+            emailService.sendOtpEmail(pendingUser.getEmail(), otp);
+        } catch (Exception e) {
+            pendingUserRepository.delete(pendingUser);
+            throw new RuntimeException("OTP email could not be sent. Please try again.");
+        }
 
-        return new ApiResponse("User registered successfully. Verify OTP.");
+        return new ApiResponse("OTP sent to email. Please verify to complete registration.");
     }
 
     public ApiResponse verifyOtp(OtpVerifyRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow();
+        PendingUser pendingUser = pendingUserRepository.findByEmail(request.getEmail())
+                .orElseThrow(() -> new RuntimeException("No pending registration found for this email"));
 
-        if (Boolean.TRUE.equals(user.getVerified())) {
-            return new ApiResponse("User already verified");
-        }
-
-        if (user.getOtp() == null || !user.getOtp().equals(request.getOtp())) {
+        if (!pendingUser.getOtp().equals(request.getOtp())) {
             throw new RuntimeException("Invalid OTP");
         }
 
-        if (user.getOtpExpiry() == null || user.getOtpExpiry().isBefore(LocalDateTime.now())) {
+        if (pendingUser.getOtpExpiry() == null || pendingUser.getOtpExpiry().isBefore(LocalDateTime.now())) {
             throw new RuntimeException("OTP expired");
         }
 
-        user.setVerified(true);
-        user.setOtp(null);
-        user.setOtpExpiry(null);
+        User user = User.builder()
+                .fullName(pendingUser.getFullName())
+                .email(pendingUser.getEmail())
+                .password(pendingUser.getPassword())
+                .phone(pendingUser.getPhone())
+                .bio("")
+                .location("")
+                .role("ROLE_USER")
+                .verified(true)
+                .createdAt(LocalDateTime.now())
+                .build();
+
         userRepository.save(user);
 
-        return new ApiResponse("OTP verified successfully");
+        pendingUserRepository.delete(pendingUser);
+
+        return new ApiResponse("OTP verified successfully. Registration completed.");
     }
 
     public AuthResponse login(LoginRequest request) {
@@ -89,10 +104,6 @@ public class AuthService {
 
         User user = userRepository.findByEmail(request.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found"));
-
-        if (!Boolean.TRUE.equals(user.getVerified())) {
-            throw new RuntimeException("Please verify OTP before login");
-        }
 
         String token = jwtService.generateToken(user.getEmail());
 
