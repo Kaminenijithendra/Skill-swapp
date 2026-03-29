@@ -6,7 +6,7 @@ import lombok.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "users")
+@Table(name = "swappusers")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -36,7 +36,7 @@ public class User {
     @Column(length = 100)
     private String location;
 
-    @Column(nullable = false, length = 20)
+    @Column(name ="user_role", nullable = false, length = 20)
     private String role;
 
     private Boolean verified;
